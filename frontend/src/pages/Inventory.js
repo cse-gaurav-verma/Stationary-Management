@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api/axiosConfig';
+import { useAuth } from '../context/AuthContext';
 import './Inventory.css';
 
 const Inventory = () => {
@@ -42,6 +43,8 @@ const Inventory = () => {
     loadItems();
   }, [page, size]);
 
+  const { isAdmin } = useAuth();
+
   const handleSearch = async (e) => {
     e.preventDefault();
     await loadItems();
@@ -55,9 +58,11 @@ const Inventory = () => {
           <p className="page-subtitle">Browse stationery items and search by name.</p>
         </div>
         <div className="page-actions">
-          <Link to="/inventory/add" className="btn btn-primary">
-            Add New Item
-          </Link>
+          {isAdmin() && (
+            <Link to="/inventory/add" className="btn btn-primary">
+              Add New Item
+            </Link>
+          )}
         </div>
       </div>
 
@@ -102,9 +107,11 @@ const Inventory = () => {
                   <td>{item.unit}</td>
                   <td>{item.description || '—'}</td>
                   <td>
-                    <Link to={`/inventory/edit/${item.id}`} className="action-link">
-                      Edit
-                    </Link>
+                    {isAdmin() && (
+                      <Link to={`/inventory/edit/${item.id}`} className="action-link">
+                        Edit
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))

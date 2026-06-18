@@ -17,6 +17,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
+import feign.FeignException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.stationery.request.exception.InsufficientStockException;
 
 @ExtendWith(MockitoExtension.class)
 class RequestServiceTest {
@@ -166,8 +168,13 @@ class RequestServiceTest {
     void approveRequest_Success() {
         // Arrange
         when(requestRepository.findById(1L)).thenReturn(Optional.of(sampleRequest));
+        com.stationery.request.dto.InventoryItemDto mockDto = new com.stationery.request.dto.InventoryItemDto();
+        mockDto.setAvailableQuantity(100);
+        // Mock getInventoryItem for pre-validation
+        when(inventoryClient.getInventoryItem(eq(1L))).thenReturn(ResponseEntity.ok(mockDto));
+        // Mock deductItemQuantity
         when(inventoryClient.deductItemQuantity(eq(1L), eq(5)))
-                .thenReturn(ResponseEntity.ok(Map.of("status", "success")));
+                .thenReturn(ResponseEntity.ok(true));
         when(requestRepository.save(any(StationeryRequest.class))).thenAnswer(invocation -> {
             StationeryRequest req = invocation.getArgument(0);
             req.setUpdatedAt(LocalDateTime.now());
@@ -181,8 +188,66 @@ class RequestServiceTest {
         assertNotNull(response);
         assertEquals("APPROVED", response.getStatus());
         assertEquals("admin1", response.getAdminUsername());
+        // Verify pre-validation call
+        verify(inventoryClient, times(1)).getInventoryItem(eq(1L));
+        // Verify deduction call
         verify(inventoryClient, times(1)).deductItemQuantity(eq(1L), eq(5));
         verify(requestRepository, times(1)).save(any(StationeryRequest.class));
+    }
+
+    @Test
+    @DisplayName("Should fail approval when insufficient stock during pre-validation")
+    void approveRequest_InsufficientStock() {
+        // Arrange
+        when(requestRepository.findById(1L)).thenReturn(Optional.of(sampleRequest));
+        com.stationery.request.dto.InventoryItemDto mockDto = new com.stationery.request.dto.InventoryItemDto();
+        mockDto.setAvailableQuantity(2); // Less than requested quantity of 5
+        when(inventoryClient.getInventoryItem(eq(1L))).thenReturn(ResponseEntity.ok(mockDto));
+
+        // Act & Assert
+        InsufficientStockException exception = assertThrows(
+                InsufficientStockException.class,
+                () -> requestService.approveRequest(1L, "admin1")
+        );
+        assertNotNull(exception);
+        // Verify inventory was never deducted since validation failed
+        verify(inventoryClient, never()).deductItemQuantity(anyLong(), anyInt());
+        verify(requestRepository, never()).save(any(StationeryRequest.class));
+    }
+
+    @Test
+    @DisplayName("Should fail approval when inventory check returns null")
+    void approveRequest_InventoryCheckNull() {
+        // Arrange
+        when(requestRepository.findById(1L)).thenReturn(Optional.of(sampleRequest));
+        when(inventoryClient.getInventoryItem(eq(1L))).thenReturn(null);
+
+        // Act & Assert
+        RuntimeException exception = assertThrows(
+                RuntimeException.class,
+                () -> requestService.approveRequest(1L, "admin1")
+        );
+        assertEquals("Inventory check failed for item: Blue Pen", exception.getMessage());
+        verify(inventoryClient, never()).deductItemQuantity(anyLong(), anyInt());
+        verify(requestRepository, never()).save(any(StationeryRequest.class));
+    }
+
+    @Test
+    @DisplayName("Should fail approval when inventory client throws FeignException during pre-validation")
+    void approveRequest_InventoryClientFeignException() {
+        // Arrange
+        when(requestRepository.findById(1L)).thenReturn(Optional.of(sampleRequest));
+        when(inventoryClient.getInventoryItem(eq(1L)))
+    .thenThrow(new RuntimeException("Inventory service unavailable"));
+
+        // Act & Assert
+        RuntimeException exception = assertThrows(
+                RuntimeException.class,
+                () -> requestService.approveRequest(1L, "admin1")
+        );
+        assertEquals("Failed to validate inventory for item: Blue Pen", exception.getMessage());
+        verify(inventoryClient, never()).deductItemQuantity(anyLong(), anyInt());
+        verify(requestRepository, never()).save(any(StationeryRequest.class));
     }
 
     @Test
@@ -221,7 +286,48 @@ class RequestServiceTest {
         );
         assertEquals("Request not found with id: '99'", exception.getMessage());
         verify(requestRepository, times(1)).findById(99L);
+        verify(inventoryClient, never()).getInventoryItem(anyLong());
         verify(inventoryClient, never()).deductItemQuantity(anyLong(), anyInt());
+        verify(requestRepository, never()).save(any(StationeryRequest.class));
+    }
+
+    @Test
+    @DisplayName("Should fulfill approved request successfully")
+    void fulfillRequest_Success() {
+        // Arrange
+        sampleRequest.setStatus(RequestStatus.APPROVED);
+        sampleRequest.setAdminUsername("admin1");
+        when(requestRepository.findById(1L)).thenReturn(Optional.of(sampleRequest));
+        when(requestRepository.save(any(StationeryRequest.class))).thenAnswer(invocation -> {
+            StationeryRequest req = invocation.getArgument(0);
+            req.setUpdatedAt(LocalDateTime.now());
+            return req;
+        });
+
+        // Act
+        RequestResponse response = requestService.fulfillRequest(1L);
+
+        // Assert
+        assertNotNull(response);
+        assertEquals("FULFILLED", response.getStatus());
+        verify(requestRepository, times(1)).save(any(StationeryRequest.class));
+        // Verify no inventory operations happen during fulfill
+        verify(inventoryClient, never()).getInventoryItem(anyLong());
+        verify(inventoryClient, never()).deductItemQuantity(anyLong(), anyInt());
+    }
+
+    @Test
+    @DisplayName("Should throw IllegalStateException when fulfilling non-approved request")
+    void fulfillRequest_NotApproved() {
+        // Arrange - request is still PENDING
+        when(requestRepository.findById(1L)).thenReturn(Optional.of(sampleRequest));
+
+        // Act & Assert
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> requestService.fulfillRequest(1L)
+        );
+        assertEquals("Request can only be fulfilled when in APPROVED status. Current status: PENDING", exception.getMessage());
         verify(requestRepository, never()).save(any(StationeryRequest.class));
     }
 }

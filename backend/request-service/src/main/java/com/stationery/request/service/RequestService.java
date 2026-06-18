@@ -149,13 +149,40 @@ public class RequestService {
         }
 
         // Deduct inventory for each item
+        // First, validate stock for all items to avoid partial deductions across services
+        for (RequestItem item : request.getItems()) {
+            try {
+                log.info("AUDIT: Validating stock for item '{}' (ID: {}) - needed: {}",
+                        item.getItemName(), item.getItemId(), item.getQuantity());
+                var resp = inventoryClient.getInventoryItem(item.getItemId());
+                if (resp == null || resp.getBody() == null) {
+                    log.error("AUDIT: Inventory service returned empty response for item ID: {}", item.getItemId());
+                    throw new RuntimeException("Inventory check failed for item: " + item.getItemName());
+                }
+                int available = resp.getBody().getAvailableQuantity();
+                if (available < item.getQuantity()) {
+                    log.error("AUDIT: Insufficient stock for item '{}' (ID: {}). Available: {}, Needed: {}",
+                            item.getItemName(), item.getItemId(), available, item.getQuantity());
+                    throw new InsufficientStockException(item.getItemName(), item.getQuantity());
+                }
+            } catch (FeignException.BadRequest e) {
+                log.error("AUDIT: Inventory service reported bad request for item ID: {}", item.getItemId());
+                throw new InsufficientStockException(item.getItemName(), item.getQuantity());
+            } catch (FeignException e) {
+                log.error("AUDIT: Failed to validate inventory for item '{}' (ID: {}): {}",
+                        item.getItemName(), item.getItemId(), e.getMessage());
+                throw new RuntimeException("Failed to validate inventory for item: " + item.getItemName(), e);
+            }
+        }
+
+        // All validations passed — now perform deductions
         for (RequestItem item : request.getItems()) {
             try {
                 log.info("AUDIT: Deducting {} units of item '{}' (ID: {}) from inventory",
                         item.getQuantity(), item.getItemName(), item.getItemId());
                 inventoryClient.deductItemQuantity(item.getItemId(), item.getQuantity());
             } catch (FeignException.BadRequest e) {
-                log.error("AUDIT: Insufficient stock for item '{}' (ID: {}). Approval failed.",
+                log.error("AUDIT: Insufficient stock during deduction for item '{}' (ID: {}). Approval failed.",
                         item.getItemName(), item.getItemId());
                 throw new InsufficientStockException(item.getItemName(), item.getQuantity());
             } catch (FeignException e) {
@@ -168,6 +195,9 @@ public class RequestService {
         request.setStatus(RequestStatus.APPROVED);
         request.setAdminUsername(adminUsername);
         StationeryRequest savedRequest = requestRepository.save(request);
+        
+        // Force load items while session is still open to avoid LazyInitializationException
+        savedRequest.getItems().size();
 
         log.info("AUDIT: Request ID: {} approved by admin '{}'. All inventory deductions successful.",
                 id, adminUsername);
@@ -194,6 +224,9 @@ public class RequestService {
         request.setRejectionReason(reason);
         request.setAdminUsername(adminUsername);
         StationeryRequest savedRequest = requestRepository.save(request);
+        
+        // Force load items while session is still open to avoid LazyInitializationException
+        savedRequest.getItems().size();
 
         log.info("AUDIT: Request ID: {} rejected by admin '{}'.", id, adminUsername);
 
@@ -217,6 +250,9 @@ public class RequestService {
 
         request.setStatus(RequestStatus.FULFILLED);
         StationeryRequest savedRequest = requestRepository.save(request);
+        
+        // Force load items while session is still open to avoid LazyInitializationException
+        savedRequest.getItems().size();
 
         log.info("AUDIT: Request ID: {} fulfilled successfully.", id);
 

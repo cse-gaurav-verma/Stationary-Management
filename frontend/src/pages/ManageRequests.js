@@ -38,7 +38,8 @@ const ManageRequests = () => {
       setMessage(`Request ${action}ed successfully.`);
       loadRequests();
     } catch (err) {
-      setError(`Failed to ${action} request.`);
+      const backendMessage = err.response?.data?.message;
+      setError(backendMessage || `Failed to ${action} request.`);
     }
   };
 

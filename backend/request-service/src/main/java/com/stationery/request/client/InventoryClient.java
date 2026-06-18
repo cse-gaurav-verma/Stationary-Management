@@ -9,15 +9,17 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.Map;
 
+import com.stationery.request.dto.InventoryItemDto;
+
 @FeignClient(name = "inventory-service")
 public interface InventoryClient {
 
     @GetMapping("/api/inventory/{id}")
-    ResponseEntity<Map<String, Object>> getInventoryItem(@PathVariable("id") Long id);
+    ResponseEntity<InventoryItemDto> getInventoryItem(@PathVariable("id") Long id);
 
     @PutMapping("/api/inventory/{id}/deduct")
-    ResponseEntity<Map<String, Object>> deductItemQuantity(
-            @PathVariable("id") Long id,
-            @RequestParam("quantity") Integer quantity
+        ResponseEntity<Boolean> deductItemQuantity(
+        @PathVariable("id") Long id,
+        @RequestParam("quantity") Integer quantity
     );
 }
